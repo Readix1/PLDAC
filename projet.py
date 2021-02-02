@@ -2,15 +2,14 @@
 """
 Created on Sun Jan 31 10:57:05 2021
 
-@author: GIANG Cécile
+@author: GIANG Cécile, LENOIR Romain
 """
 
 ######################### IMPORTATION DES DONNEES #########################
 
-import numpy as np
 import json
 import matplotlib.pyplot as plt
-import math
+import numpy as np
 
 
 ######################### PREPARATION DES DONNEES #########################
@@ -68,6 +67,12 @@ def parse(filename, data_number):
 
 
 def reviewPerMonth(data, fields):
+    """ Renvoie la liste du nombre de reviews posté par mois dans data.
+        @param data: list(str), liste des échantillons de données, chaque
+                      échantillon correspondant à un avis posté.
+        @param fields: list(str), liste des attributs
+        @return X: list(int), liste du nombre de reviews par mois
+    """
     index_time = fields.index('reviewTime')
     
     # Temps sous la forme 'mois jour, annee'
@@ -94,47 +99,59 @@ def reviewPerMonth(data, fields):
         X[liste_annees.index(annee)*len(liste_mois) + liste_mois.index(mois)] += 1
     
     return X
-    
-def detectionBurst(data, fields, fenetre):
-    x = reviewPerMonth(data, fields)
-    m = moyenneM(fenetre, x)
-    dif = np.abs([x[i]-m[i] for i in range(len(x))])
-    plt.plot(x)
-    plt.plot(m)
-    plt.plot(dif)
-    return x, m, dif
 
-def moyenneM(fenetre, x ):
-    m = [0] * len(x)
-    inter=int(fenetre/2)
-    for i in range(len(m)):
-        
-        if i<inter:
-            m[i]= np.mean(x[:i+inter+1])
+
+def moyenneMobile(X, width):
+    """ Calcule la moyenne mobile de la liste X sur une fenêtre de temps de
+        largeur width.
+        @param X: list(int), liste du nombre de reviews par intervalle de temps
+                  que l'on veut moyenner
+        @param width: int, largeur de la fenêtre de temps
+        @param mean: list(float), liste des moyennes mobiles de X
+    """
+    # Initialisation des moyennes mobiles de X
+    mean = [0] * len(X)
+    
+    # inter: nombre de points pris en compte de chaque côté du point courant
+    inter = int(width/2)
+    
+    for i in range(len(X)):
+        if i < inter:
+            mean[i] = np.mean( X[ : i + inter + 1] )
         else:
-            if len(x)-i< inter:
-                m[i]= np.mean(x[i-inter:])
-            else:   
-                m[i]=np.mean(x[i-inter:i+inter+1])
-    
-    return m
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
+            if len(X)-i < inter:
+                mean[i] = np.mean( X[ i - inter : ] )
+            else:
+                mean[i] = np.mean( X[i - inter : i + inter + 1] )
+    return mean
 
-
+    
+def detectionBurst(data, fields, width, display=False):
+    """ Fonction permettant de détecter un burst de reviews dans le temps, 
+        pour les données data et fields et une fenêtre de temps de largeur
+        width.
+        Calcule la différence entre le nombre de reviews dans le temps et la 
+        moyenne mobile.
+        @param data: list(str), liste des échantillons de données, chaque
+                      échantillon correspondant à un avis posté.
+        @param fields: list(str), liste des attributs
+        @param width: int, largeur de la fenêtre de temps
+        @param mean: list(float), liste des moyennes mobiles de X
+        @return diff: list(float), liste des différences entre nombre de reviews
+                      et moyenne mobile
+    """
+    # X: nombre de reviews par mois, MM: moyenne mobile de X
+    X = reviewPerMonth(data, fields)
+    MM = moyenneMobile(X, width)
+    
+    # diff: liste des différences entre nombre de reviews et moyenne mobile
+    diff = np.abs( [ X[i] - MM[i] for i in range(len(X)) ] )
+    
+    # Affichage graphique:
+    if display:
+        plt.title('Nombre de reviews par mois')
+        plt.plot(X)
+        plt.plot(MM)
+        plt.plot(diff)
+        
+    return X, MM, diff
