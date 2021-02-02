@@ -1,0 +1,7 @@
+On a fait le burst
+
+est ce qu'une granularité par mois est elle bonne ? 
+on fait le comptage sur la categorie ou un seul produit ? 
+moyenne mobile classique suffit ? ou avec ponderation ? 
+
+aide git ?
