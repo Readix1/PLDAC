@@ -10,6 +10,7 @@ Created on Sun Jan 31 10:57:05 2021
 import json
 import matplotlib.pyplot as plt
 import numpy as np
+from sklearn.neighbors.kde import KernelDensity
 
 
 ######################### PREPARATION DES DONNEES #########################
@@ -66,6 +67,12 @@ def parse(filename, data_number):
 #data, fields = parse('data/cellphones_accessories.json', data_number=10000)
 
 
+###################### DETECTION DE BURST DE REVIEWS ######################
+
+# Détection de bursts de reviews, qui indiquent des périodes de temps pendant
+# lesquelles le nombre de reviews postés est anormalement élevé, et où l'on
+# peut suspecter la présence de reviews spam
+
 def reviewPerMonth(data, fields):
     """ Renvoie la liste du nombre de reviews posté par mois dans data.
         @param data: list(str), liste des échantillons de données, chaque
@@ -101,6 +108,8 @@ def reviewPerMonth(data, fields):
     return X
 
 
+# ------- Détection de bursts de reviews par moyenne mobile
+
 def moyenneMobile(X, width):
     """ Calcule la moyenne mobile de la liste X sur une fenêtre de temps de
         largeur width.
@@ -123,8 +132,7 @@ def moyenneMobile(X, width):
                 mean[i] = np.mean( X[ i - inter : ] )
             else:
                 mean[i] = np.mean( X[i - inter : i + inter + 1] )
-    return mean
-
+    return mean    
     
 def detectionBurst(data, fields, width, display=False):
     """ Fonction permettant de détecter un burst de reviews dans le temps, 
@@ -152,6 +160,39 @@ def detectionBurst(data, fields, width, display=False):
         plt.title('Nombre de reviews par mois')
         plt.plot(X)
         plt.plot(MM)
-        plt.plot(diff)
+        #plt.plot(diff)
         
     return X, MM, diff
+
+
+# ------------ Détection de bursts de reviews par estimation par noyau - KDE
+
+def KDE(data, fields, h):
+    """ Fonction permettant de détecter un burst de reviews dans le temps, 
+        pour les données data et fields et une fenêtre de temps de largeur h,
+        en se basant sur l'estimation par noyau (KDE - Kernel Density Estimation)
+        @param data: list(str), liste des échantillons de données, chaque
+                      échantillon correspondant à un avis posté.
+        @param fields: list(str), liste des attributs
+        @param h: int, largeur de la fenêtre de temps
+        @return diff: list(float), liste des différences entre nombre de reviews
+                      et moyenne mobile
+    """
+    # X: nombre de reviews par mois, 
+    # X_ext: extension de X, remis sous format histogramme
+    X = reviewPerMonth(data, fields)
+    X_ext = []
+    
+    for i in range(len(X)):
+        X_ext += [i]*X[i]
+    
+    # Lissage par estimation par noyau (KDE - Kernel Density Estimation)
+    X_ext = np.array(X_ext).reshape(-1, 1)
+    kde = KernelDensity(kernel='gaussian', bandwidth=h).fit(X_ext)
+    
+    plt.title('Lissage par estimation par noyau - KDE')
+    X_plot = np.linspace(0, len(X))
+    Y_plot = kde.score_samples(X_plot.reshape(-1,1))
+    plt.plot(X_plot, Y_plot)
+    
+    return Y_plot
