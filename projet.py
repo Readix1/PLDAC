@@ -12,6 +12,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 from sklearn.neighbors.kde import KernelDensity
 
+import copy
+
 
 ######################### PREPARATION DES DONNEES #########################
 
@@ -111,8 +113,7 @@ def reviewPerMonth(data, fields):
 # ------- Détection de bursts de reviews par moyenne mobile
 
 def moyenneMobile(X, width):
-    """ Calcule la moyenne mobile de la liste X sur une fenêtre de temps de
-        largeur width.
+    """ Calcule la moyenne mobile de la liste X sur une fenêtre de largeur width.
         @param X: list(int), liste du nombre de reviews par intervalle de temps
                   que l'on veut moyenner
         @param width: int, largeur de la fenêtre de temps
@@ -196,3 +197,144 @@ def KDE(data, fields, h):
     plt.plot(X_plot, Y_plot)
     
     return Y_plot
+
+
+############ DETECTION DE REVIEWS SPAMS PAR DEVIATION DE NOTATION ############
+
+# Les reviews spams impliquent généralement une projection incorrecte de la
+# qualité d'un produit via une note qui dévie beaucoup de l'opinion générale
+
+def sortReviewsByTime(data, fields):
+    """ Trie les reviews de l'échantillon de données data par ordre 
+        chronologique.
+        @param data: list(str), liste des échantillons de données, chaque
+                     échantillon correspondant à un avis posté
+        @param fields: list(str), liste des attributs
+        @return : list(str), data avec reviews triés chronologiquement
+        @return indices: list(int), liste des indices des données triés 
+                         chrolonogiquement dans l'échantillon data initial
+    """
+    index_time = fields.index('reviewTime')
+    
+    # Liste des dates et des indices de ces dates
+    dates = [0] * len(data)
+    dates_indices = []
+    
+    # Temps sous la forme 'mois jour, annee'
+    for i in range(len(data)):
+        t = data[i][index_time]
+        mois, jour, annee = t.split()
+        dates[i] = (int(annee), int(mois), int(jour.strip(',')))
+    
+    # Tri des dates par ordre chronologique et récupération des indices des
+    # dates triées
+    for date, indice in sorted((e, i) for i, e in enumerate(dates)):
+        dates_indices.append(indice)
+    
+    return [ data[i] for i in dates_indices ], dates_indices
+
+
+def deviationNotes(data, fields, width, bins):
+    """ Calcule la déviation des notes dans le temps et crée l'histogramme
+        correspondant aux déviations entre notes données par les utilisateurs
+        note moyenne (moyenne mobile).
+        @param data: list(str), liste des échantillons de données, chaque
+                     échantillon correspondant à un avis posté
+        @param fields: list(str), liste des attributs
+        @param width: int, largeur de la fenêtre pour la moyenne mobile
+        @param bins: int, nombre d'intervalles dans [0,5] que l'on veut 
+                     considérer pour tracer l'histogramme
+        @return : float array, effectif des différences par intervalle
+    """
+    # Tri des reviews de data par ordre chronologique
+    data_sorted, indices_sorted = sortReviewsByTime(data, fields)
+    
+    # Notes des reviews triés chronologiquement, calcul des notes moyennes
+    notes = np.array( [ r[0] for r in data_sorted ] )
+    notes_moyennes = np.array( moyenneMobile(notes, width) )
+    
+    # Calcul de la déviation entre notes données et notes moyennes (moyenne mobile)
+    deviation_notes = np.abs(notes - notes_moyennes)
+    
+    # Affichage par histogramme, récupération des effectifs par intervalle
+    plt.title('Histogramme de la déviation des notes, pour bins = %d' %bins)
+    hist = plt.hist(deviation_notes, np.linspace(0, 5, bins+1))
+    
+    # retourner les dates des reviews dont la déviation est de plus de 3,25
+    indices_suspect = np.where(deviation_notes >= 3.25)[0]
+    ####### COMMENT DETERMINER LES NOTES A DISCRIMINER #######
+
+    return [indices_sorted[i] for i in indices_suspect]
+
+
+
+def showRDperMonth(data, fields, width, bins):
+    """ Renvoie la liste du nombre de reviews posté par mois dans data.
+        @param data: list(str), liste des échantillons de données, chaque
+                      échantillon correspondant à un avis posté.
+        @param fields: list(str), liste des attributs
+        @return X: list(int), liste du nombre de reviews par mois
+    """
+    # ----------------- TRACAGE DU NOMBRE DE REVIEWS PAR MOIS
+    
+    index_time = fields.index('reviewTime')
+    
+    # Temps sous la forme 'mois jour, annee'
+    times = [d[index_time] for d in data]
+    
+    # Normalisation sous la forme (annee, mois, jour)
+    times_normalized = []
+    for t in times:
+        mois, jour, annee = t.split()
+        times_normalized.append((int(annee), int(mois), int(jour.strip(','))))
+    
+    # Tri des temps du plus ancien au plus récent
+    times_normalized = sorted(times_normalized)
+    
+    # Plot le nombre de review par mois
+    liste_annees = sorted( np.unique( [t[0] for t in times_normalized] ) )
+    liste_mois = sorted( np.unique( [t[1] for t in times_normalized] ) )
+    liste_jours = sorted( np.unique( [t[2] for t in times_normalized] ) )
+    
+    # X: liste du nombre de reviews postés par mois
+    X = [0] * (len(liste_annees) * len(liste_mois))
+    
+    for annee, mois, jour in times_normalized:
+        X[liste_annees.index(annee)*len(liste_mois) + liste_mois.index(mois)] += 1
+    
+    
+    # ----------------- AFFICHAGE DES DATES OU L'ON SUSPECTE UN SPAM
+    
+    index_dev = deviationNotes(data, fields, width, bins)
+    data_dev = [data[i] for i in index_dev]
+    
+    # X: liste des dates où l'on suspecte un review spam
+    Y = [0] * (len(liste_annees) * len(liste_mois))
+    
+    # Temps sous la forme 'mois jour, annee'
+    times = [d[index_time] for d in data_dev]
+    
+    # Normalisation sous la forme (annee, mois, jour)
+    times_normalized = []
+    for t in times:
+        mois, jour, annee = t.split()
+        times_normalized.append((int(annee), int(mois), int(jour.strip(','))))
+    
+    # Tri des temps du plus ancien au plus récent
+    times_normalized = sorted(times_normalized)
+    
+    for annee, mois, jour in times_normalized:
+        Y[liste_annees.index(annee)*len(liste_mois) + liste_mois.index(mois)] += 1
+    
+    # ------- Moyenne mobile
+    mm = moyenneMobile(X, 5)
+    
+    # ------- AFFICHAGE
+    plt.figure()
+    plt.plot(X)
+    plt.plot(mm)
+    for e in Y:
+        if e != 0:
+            plt.scatter(Y.index(e), 0, s=1)
+    
+    return X, Y
