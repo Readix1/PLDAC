@@ -234,7 +234,7 @@ def sortReviewsByTime(data, fields):
     return [ data[i] for i in dates_indices ], dates_indices
 
 
-def deviationNotes(data, fields, width, bins):
+def deviationNotes(data, fields, width, bins, seuil):
     """ Calcule la déviation des notes dans le temps et crée l'histogramme
         correspondant aux déviations entre notes données par les utilisateurs
         note moyenne (moyenne mobile).
@@ -261,14 +261,14 @@ def deviationNotes(data, fields, width, bins):
     hist = plt.hist(deviation_notes, np.linspace(0, 5, bins+1))
     
     # retourner les dates des reviews dont la déviation est de plus de 3,25
-    indices_suspect = np.where(deviation_notes >= 3.25)[0]
+    indices_suspect = np.where(deviation_notes >= seuil)[0]
     ####### COMMENT DETERMINER LES NOTES A DISCRIMINER #######
 
     return [indices_sorted[i] for i in indices_suspect]
 
 
 
-def showRDperMonth(data, fields, width, bins):
+def showRDperMonth(data, fields, width, bins, seuil):
     """ Renvoie la liste du nombre de reviews posté par mois dans data.
         @param data: list(str), liste des échantillons de données, chaque
                       échantillon correspondant à un avis posté.
@@ -305,7 +305,7 @@ def showRDperMonth(data, fields, width, bins):
     
     # ----------------- AFFICHAGE DES DATES OU L'ON SUSPECTE UN SPAM
     
-    index_dev = deviationNotes(data, fields, width, bins)
+    index_dev = deviationNotes(data, fields, width, bins, seuil)
     data_dev = [data[i] for i in index_dev]
     
     # X: liste des dates où l'on suspecte un review spam
