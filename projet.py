@@ -342,6 +342,15 @@ def showRDperMonth(data, fields, width, bins, seuil):
 
 
 def docSansDoublon(data, fields, nomFichier):
+    """
+        List * List * str -> List
+        data : liste de review (liste)
+        fields : liste des attributs de data
+        nomFichier: path ou est stocké la liste sans doublon
+        
+        renvoie data sans les doublons (auteur, texte) et la stock dans nomFichier
+    
+    """
     if fields.index('reviewerName'):
         iAuteur=fields.index('reviewerName')
         if fields.index('reviewText'):
