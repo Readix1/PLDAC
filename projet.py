@@ -338,3 +338,40 @@ def showRDperMonth(data, fields, width, bins, seuil):
             plt.scatter(Y.index(e), 0, s=1)
     
     return X, Y
+
+
+
+def docSansDoublon(data, fields, nomFichier):
+    if fields.index('reviewerName'):
+        iAuteur=fields.index('reviewerName')
+        if fields.index('reviewText'):
+            iText = fields.index('reviewText')
+        else:
+            return 0
+    else:
+        return 0
+    
+    
+    hashs=set()
+    file= open(nomFichier, 'w', encoding='utf-8')
+    data2=[]   
+    
+    for i in data:
+        if i[iText]:
+            h = hash(i[iAuteur]+i[iText])
+        else:
+            continue
+        
+        if h not in hashs:
+            hashs.add(h)
+            json.dump(i, file)
+            data2.append(i)
+           
+    return data2
+
+
+
+#################### COMMANDES ##############
+
+"""file='data/Cell_Phones_and_Accessories.json'
+docs = parse(file,13000)"""
