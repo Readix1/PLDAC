@@ -511,6 +511,11 @@ def initScores(data, fields, suspams_ids):
         @param suspams_ids = list(int), liste des indices des reviews suspectées
                              spam (dans fenêtre de burst + déviation note)
     """
+    # Initilisation des scores reviews
+    index_revs = fields.index('reviewText')
+    suspams_ids = suspams_ids.union(doublons(data, fields))
+    score_revs = { id_rev : -1 if id_rev in suspams_ids else 1 for id_rev in range(len(data)) }
+    
     # Initilisation des scores utilisateurs à +1
     index_utils = fields.index('reviewerID')
     unique_utils = np.unique( np.array( [r[index_utils] for r in data] ) )
@@ -520,8 +525,5 @@ def initScores(data, fields, suspams_ids):
     index_prods = fields.index('asin')
     unique_prods = np.unique( np.array( [r[index_prods] for r in data] ) )
     score_prods = { id_prod : 1 for id_prod in unique_prods }
-
-    # Initilisation des scores reviews
-    index_revs = fields.index('reviewText')
-    suspams_ids = suspams_ids.union(doublons(data, fields))
-    score_utils = { id_rev : -1 if id_rev in suspams_ids else 1 for id_rev in range(len(data)) }
+    
+    return score_revs, score_utils, score_prods
