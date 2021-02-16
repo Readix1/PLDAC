@@ -407,7 +407,7 @@ def doublons(data, fields):
         return 0
     
     
-    hashs=set()
+    hashs=dict()
     res=set()  
     
     for i in range(len(data)):
@@ -417,8 +417,9 @@ def doublons(data, fields):
             continue
         
         if h not in hashs:
-            hashs.add(h)
+            hashs[h] =i
         else:
+            res.add(hashs[h])
             res.add(i)
            
     return res
