@@ -11,6 +11,7 @@ import json
 import matplotlib.pyplot as plt
 import numpy as np
 from sklearn.neighbors.kde import KernelDensity
+from scipy.signal import find_peaks
 
 import copy
 
@@ -340,7 +341,6 @@ def showRDperMonth(data, fields, width, bins, seuil):
     return X, Y
 
 
-
 def docSansDoublon(data, fields, nomFichier):
     """
         List * List * str -> List
@@ -351,6 +351,9 @@ def docSansDoublon(data, fields, nomFichier):
         renvoie data sans les doublons (auteur, texte) et la stock dans nomFichier
     
     """
+    # Compteur de doublons
+    cpt = 0
+    
     if fields.index('reviewerName'):
         iAuteur=fields.index('reviewerName')
         if fields.index('reviewText'):
@@ -375,9 +378,13 @@ def docSansDoublon(data, fields, nomFichier):
             hashs.add(h)
             json.dump(i, file)
             data2.append(i)
-           
+        else:
+            cpt += 1
+    
+    # On affiche le nombre de doublons détectés
+    print('\n', str(cpt) , 'doublons non-spams (idReviewer - review) détectés')
+    
     return data2
-
 
 
 def doublons(data, fields):
@@ -417,7 +424,84 @@ def doublons(data, fields):
     return res
 
 
-#################### COMMANDES ##############
+def detectFromBurstRD(data, fields, width, bins, seuil, window=10, height=50, distance=10, display=False):
+    """ Renvoie la liste des indices des datas de reviews suspects:
+        * reviews dont la note dévie beaucoup de la moyenne mobile
+        * et qui en plus se trouve près d'un pic (burst de reviews)
+        @width
+        @param width: int, largeur de la fenêtre pour la moyenne mobile
+        @param bins: int, nombre d'intervalles dans [0,5] que l'on veut 
+                     considérer pour tracer l'histogramme
+        @param seuil: float, valeur à partir de laquelle une déviation est suspecte
+        @param window: int, fenetre de temps que l'on considère suspect autour 
+                       d'un peak du nombre de reviews
+        @param height: int, seuil au dessus duquel on prend nos pics
+        @param distance: int, distance min entre 2 pics
+        
+        @return suspams_ids: list(int), liste des indices des reviews suspectées
+                             spam (dans fenêtre de burst + déviation note)
+    """
+    # Première liste de reviews suspectes: reviews dans un burst temporel
+    X, Y = showRDperMonth(data, fields, width, bins, seuil)
+    X = np.array(X)
+    Y = np.array(Y)
+    
+    # Trouver la liste les maxima locaux se trouvant au dessus d'un certain seuil height,
+    # et à une certaine distance d'autres peaks
+    peaks, _ = find_peaks(X, height = height, distance = distance)
+    
+    # Dans peaks on a maintenant la liste indices des pics (maxima locaux) du 
+    # nombre de reviews par mois. On considère les reviews dont les indices se
+    # trouvent dans une fenêtre de temps window autour de ces pics
+    
+    # Liste des indices de pics et leur voisinage direct
+    window_ids = []
+    w = window // 2
+    
+    for p in peaks:
+        window_ids += [p + i for i in range(-w , w + 1)]
+    
+    Y = np.where(Y != 0)[0]
+    
+    # windows_ids: liste des indices de reviews dans une fenêtre temporelle d'un pic
+    # Y: liste des indices de reviews dont la note est suspecte (déviation forte)
+    # On veut les indices communs des deux listes
+    suspams_ids = [i for i in Y if i in window_ids]
+    
+    # Affichage
+    if display:
+        plt.figure()
+        plt.title('Pics à prendre en compte')
+        
+        # Affichage des pics
+        plt.plot(X)
+        plt.plot(peaks, X[peaks], "X")
+        
+        # Affichage des reviews suspectées comme spam
+        for r in suspams_ids:
+            plt.scatter(r, 0, s=1)
+            
+        plt.show()
+    
+    return suspams_ids
 
-"""file='data/Cell_Phones_and_Accessories.json'
-docs = parse(file,13000)"""
+
+def initScores(data, fields, suspams_ids):
+    """ Initialisation des scores utilisateurs, produits et reviews.
+        @param suspams_ids = list(int), liste des indices des reviews suspectées
+                             spam (dans fenêtre de burst + déviation note)
+    """
+    # Initilisation des scores utilisateurs à +1
+    index_utils = fields.index('reviewerID')
+    unique_utils = np.unique( np.array( [r[index_utils] for r in data] ) )
+    score_utils = { id_util : 1 for id_util in unique_utils }
+    
+    # Initilisation des scores produits à +1
+    index_prods = fields.index('asin')
+    unique_prods = np.unique( np.array( [r[index_prods] for r in data] ) )
+    score_prods = { id_prod : 1 for id_prod in unique_prods }
+
+    # Initilisation des scores reviews
+    index_revs = fields.index('reviewText')
+    unique_revs = np.unique( np.array( [r[index_revs] for r in data] ) )
+    #score_utils = { id_util : 1 for id_util in unique_utils }    
