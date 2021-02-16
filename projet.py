@@ -380,6 +380,43 @@ def docSansDoublon(data, fields, nomFichier):
 
 
 
+def doublons(data, fields):
+    """
+        List * List * str -> List
+        data : liste de review (liste)
+        fields : liste des attributs de data
+        nomFichier: path ou est stocké la liste sans doublon
+        
+        renvoie data sans les doublons (auteur, texte) et la stock dans nomFichier
+    
+    """
+    if fields.index('reviewText'):
+        iText = fields.index('reviewText')
+        if fields.index("asin"):
+            iId = fields.index("asin")
+        else:
+            return 0
+    else:
+        return 0
+    
+    
+    hashs=set()
+    res=set()  
+    
+    for i in range(len(data)):
+        if data[i][iText]:
+            h = hash(data[i][iText])
+        else:
+            continue
+        
+        if h not in hashs:
+            hashs.add(h)
+        else:
+            res.add(i)
+           
+    return res
+
+
 #################### COMMANDES ##############
 
 """file='data/Cell_Phones_and_Accessories.json'
