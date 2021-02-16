@@ -425,7 +425,7 @@ def doublons(data, fields):
     return res
 
 
-def detectFromBurstRD(data, fields, width, bins, seuil, window=10, height=50, distance=10, display=False):
+def detectFromBurstRD(data, fields, width, bins, seuil, window=4, height=50, distance=10, display=False):
     """ Renvoie la liste des indices des datas de reviews suspects:
         * reviews dont la note dévie beaucoup de la moyenne mobile
         * et qui en plus se trouve près d'un pic (burst de reviews)
@@ -467,7 +467,7 @@ def detectFromBurstRD(data, fields, width, bins, seuil, window=10, height=50, di
     # windows_ids: liste des indices de reviews dans une fenêtre temporelle d'un pic
     # Y: liste des indices de reviews dont la note est suspecte (déviation forte)
     # On veut les indices communs des deux listes
-    suspams_ids = [i for i in Y if i in window_ids]
+    suspams = [i for i in Y if i in window_ids]
     
     # Affichage
     if display:
@@ -479,12 +479,31 @@ def detectFromBurstRD(data, fields, width, bins, seuil, window=10, height=50, di
         plt.plot(peaks, X[peaks], "X")
         
         # Affichage des reviews suspectées comme spam
-        for r in suspams_ids:
+        for r in suspams:
             plt.scatter(r, 0, s=1)
             
         plt.show()
     
-    return suspams_ids
+    
+    # suspams_ids: Liste des indices des reviews suspectes dans data
+    
+    # Temps sous la forme 'mois jour, annee'
+    index_time = fields.index('reviewTime')
+    times = [d[index_time] for d in data]
+    
+    # Normalisation sous la forme (annee, mois, jour)
+    tn = []
+    for t in times:
+        mois, jour, annee = t.split()
+        tn.append((int(annee), int(mois), int(jour.strip(','))))
+    
+    liste_annees = sorted( np.unique( [t[0] for t in tn] ) )
+    liste_mois = sorted( np.unique( [t[1] for t in tn] ) )
+    liste_jours = sorted( np.unique( [t[2] for t in tn] ) )
+    
+    suspams_ids = [i for i in range(len(data)) if liste_annees.index(tn[i][0])*len(liste_mois) + liste_mois.index(tn[i][1]) in suspams]
+    
+    return set(suspams_ids)
 
 
 def initScores(data, fields, suspams_ids):
@@ -504,5 +523,5 @@ def initScores(data, fields, suspams_ids):
 
     # Initilisation des scores reviews
     index_revs = fields.index('reviewText')
-    unique_revs = np.unique( np.array( [r[index_revs] for r in data] ) )
-    #score_utils = { id_util : 1 for id_util in unique_utils }    
+    suspams_ids = suspams_ids.union(doublons(data, fields))
+    score_utils = { id_rev : -1 if id_rev in suspams_ids else 1 for id_rev in range(len(data)) }
