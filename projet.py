@@ -397,6 +397,9 @@ def doublons(data, fields):
         renvoie data sans les doublons (auteur, texte) et la stock dans nomFichier
     
     """
+    # Compteur de doublons
+    cpt = 0
+    
     if fields.index('reviewText'):
         iText = fields.index('reviewText')
         if fields.index("asin"):
@@ -421,6 +424,10 @@ def doublons(data, fields):
         else:
             res.add(hashs[h])
             res.add(i)
+            cpt += 1
+    
+    # On affiche le nombre de doublons détectés
+    print('\n', str(cpt) , 'doublons spams (<> idReviewer, <> idProduit, review) détectés')
            
     return res
 
@@ -429,7 +436,6 @@ def detectFromBurstRD(data, fields, width, bins, seuil, window=4, height=50, dis
     """ Renvoie la liste des indices des datas de reviews suspects:
         * reviews dont la note dévie beaucoup de la moyenne mobile
         * et qui en plus se trouve près d'un pic (burst de reviews)
-        @width
         @param width: int, largeur de la fenêtre pour la moyenne mobile
         @param bins: int, nombre d'intervalles dans [0,5] que l'on veut 
                      considérer pour tracer l'histogramme
@@ -495,7 +501,7 @@ def detectFromBurstRD(data, fields, width, bins, seuil, window=4, height=50, dis
     tn = []
     for t in times:
         mois, jour, annee = t.split()
-        tn.append((int(annee), int(mois), int(jour.strip(','))))
+        tn.append((int(annee), int(mois), int(jour.strip(','))))    
     
     liste_annees = sorted( np.unique( [t[0] for t in tn] ) )
     liste_mois = sorted( np.unique( [t[1] for t in tn] ) )
@@ -506,24 +512,256 @@ def detectFromBurstRD(data, fields, width, bins, seuil, window=4, height=50, dis
     return set(suspams_ids)
 
 
-def initScores(data, fields, suspams_ids):
-    """ Initialisation des scores utilisateurs, produits et reviews.
-        @param suspams_ids = list(int), liste des indices des reviews suspectées
-                             spam (dans fenêtre de burst + déviation note)
+class ReviewGraph:
+    """ Classe pour la propagation des scores utilisateur - score - produit
+        par un algorithme de type PageRank.
     """
-    # Initilisation des scores reviews
-    index_revs = fields.index('reviewText')
-    suspams_ids = suspams_ids.union(doublons(data, fields))
-    score_revs = { id_rev : -1 if id_rev in suspams_ids else 1 for id_rev in range(len(data)) }
+    def __init__(self, data, fields, width=6, bins=20, seuil=3.25, window=4, height=50, distance=10):
+        """ Constructeur de la classe ReviewGraph.
+        """
+        self.data = data
+        self.fields = fields
+        self.suspams_ids = detectFromBurstRD(data, fields, width=width, bins=bins, seuil=seuil, window=window, height=height, distance=distance, display=False)
+        
+        # Initialisation des scores utilisateur, produits et reviews
+        
+        # T: Reviewer's trustiness (score utilisateur): initialisation à +1
+        self.index_utils = fields.index('reviewerID')
+        unique_utils = np.unique( np.array( [r[self.index_utils] for r in data] ) )
+        self.score_utils = { id_util : 1 for id_util in unique_utils }
+        
+        # R: Product reliability (score produit): initialisation à +1
+        self.index_prods = fields.index('asin')
+        unique_prods = np.unique( np.array( [r[self.index_prods] for r in data] ) )
+        self.score_prods = { id_prod : 1 for id_prod in unique_prods }
+        
+        # H: Review honesty (score review): initialisation selon le score d'entente
+        #self.suspams_ids = self.suspams_ids.union(doublons(data, fields))
+        #self.score_revs = { id_rev : -1 if id_rev in self.suspams_ids else 1 for id_rev in range(len(data)) }
+        self.score_revs = { id_rev : 0 for id_rev in range( len( data ) ) }
+        
+        # Création du dictionnaire des revues par mois: idRevsDate
+        self.index_time = fields.index('reviewTime')
+        self.idRevsDate = {}
+        
+        for i in range(len(data)):
+            mois, jour, annee = data[i][self.index_time].split()
+            if (int(annee), int(mois)) not in self.idRevsDate:
+                self.idRevsDate[ (int(annee), int(mois)) ] = []
+            self.idRevsDate[ (int(annee), int(mois)) ].append(i)
+        
+        # Clés de idRevsDate dans l'ordre chronologique
+        self.idRevsDate_keys = sorted( self.idRevsDate.keys() )
+        
+        # Pour nous faciliter la tâche, on redéfinit la base de données en 
+        # indexant par utilisateur ou par produit
+        self.db_utils = { id_util : [] for id_util in self.score_utils }
+        self.db_prods = { id_prod : [] for id_prod in self.score_prods }
+        
+        for i in range(len(data)):
+            self.db_utils[ data[i][self.index_utils] ].append( (i, data[i]) )
+            self.db_prods[ data[i][self.index_prods] ].append( (i, data[i]) )
+        
+    def getNeighRevs(self, index_rev, window = 1):
+        """ Pour trouver les revues publiées dans une fenêtre de temps window
+            autour de la revue d'indice i dans data (fenêtre en mois: si elle
+            vaut 6 par exemple, on prend les revues publiées entre les 3 mois 
+            précédant la revue actuelle et les 3 mois suivant sa publication).
+            @param index_rev: int, indice du review dans data
+            @param window: int, fenêtre de temps (en mois) considérée
+            @return neighRevs: list(int), liste des indices des voisins de 
+                               index_rev dans la fenêtre de temps window.
+        """
+        w = window // 2
+        
+        # On retrouve l'indice de la revue dans self.idRevsDate
+        mois, jour, annee = self.data[index_rev][self.index_time].split()
+        i = self.idRevsDate_keys.index( (int(annee), int(mois)) )
+        
+        # Définition des indices bornant la fenêtre de temps
+        imin = i - w if i - w > 0 else 0
+        imax = i + w + 1 if i + w + 1 < len( self.idRevsDate_keys ) else len( self.idRevsDate_keys )
+        
+        # neighRevs: liste des revues publiées dans la fenêtre de temps
+        neighRevs = []
+        for i in self.idRevsDate_keys[ imin : imax ]:
+            neighRevs += self.idRevsDate[i]
+        
+        return neighRevs
     
-    # Initilisation des scores utilisateurs à +1
-    index_utils = fields.index('reviewerID')
-    unique_utils = np.unique( np.array( [r[index_utils] for r in data] ) )
-    score_utils = { id_util : 1 for id_util in unique_utils }
+    def T(self, id_util):
+        """ Reviewer's trustiness (confiance utilisateur).
+        """
+        # Calcul de la somme des scores honnêteté des revues de l'utilisateur
+        h = np.sum( [ self.score_revs[id_rev] for id_rev, rev in self.db_utils[id_util] ] )
+        return ( 2 / ( 1 + np.exp(-h) ) ) - 1
+        
+    def H(self, id_rev, delta = 1):
+        """ Review honesty (honnêteté revue).
+            @param delta: float, borne sur la différence entre la note actuelle 
+                          et les notes des voisins.
+        """
+        # On récupère les indices des voisins (dans le sens temporel) de id_rev
+        neighs = self.neighs[id_rev]
+        
+        # Liste des voisins de notes similaires ou différentes à id_rev
+        index_rating = self.fields.index('overall')
+        rating = self.data[id_rev][index_rating]
+        
+        # Compteurs score de confiance des voisins similaires - différents
+        cpt_sim = 0
+        cpt_dif = 0
+        
+        for i in neighs:
+            if np.abs( rating - self.data[i][index_rating] ) <= delta:
+                cpt_sim += self.score_utils[self.data[i][self.index_utils]]
+            else:
+                cpt_dif += self.score_utils[self.data[i][self.index_utils]]
+        
+        # Calcul et normalisation du score d'entente
+        a = cpt_sim - cpt_dif
+        a = ( 2 / ( 1 + np.exp(-a) ) ) - 1
+        
+        return np.abs( self.score_prods[ self.data[id_rev][self.index_prods] ] ) * a
+                      
+    def R(self, id_prod, median = 3):
+        """ Product reliability (fiabilité produit).
+        """        
+        theta = 0
+        for i, d in self.db_prods[id_prod]:
+            if self.score_utils[ d[self.index_utils] ] > 0:
+                theta += self.score_utils[ d[self.index_utils] ] * ( self.score_revs[i] - median )
+        
+        return ( 2 / ( 1 + np.exp(-theta) ) ) - 1
     
-    # Initilisation des scores produits à +1
-    index_prods = fields.index('asin')
-    unique_prods = np.unique( np.array( [r[index_prods] for r in data] ) )
-    score_prods = { id_prod : 1 for id_prod in unique_prods }
+    def computeScores(self, window = 3, delta = 1, median = 3, niter = 50):
+        """ Algorithme de type PageRank pour propager les scores.
+            @param window: int, fenêtre de temps prise pour prendre le 
+                           voisinage d'une revue
+            @param delta: float, borne sur la différence entre la note actuelle 
+                          et les notes des voisins.
+            @param median: float, valeur médiane des notes
+            @param niter: int, nombre d'itérations
+        """
+        # Calcul des voisins temporels de chaque revue
+        self.neighs = { id_rev : self.getNeighRevs(id_rev, window = window) for id_rev in self.score_revs }
+        
+        for iter in range(niter):
+            
+            # Propagation scores reviews
+            for id_rev in self.score_revs:
+                self.score_revs[id_rev] = self.H(id_rev, delta = delta)
+            
+            # Propagation des scores utilisateurs
+            for id_util in self.score_utils:
+                self.score_utils[id_util] = self.T(id_util)
+            
+            # Propagation des scores produits
+            for id_prod in self.score_prods:
+                self.score_prods[id_prod] = self.R(id_prod, median = median)
+        
+        # On remet les scores des reviews sur 100
+        self.score_revs_norms = { id_rev : np.round( (self.score_revs[id_rev] + 1) * 50 ) for id_rev in self.score_revs }
+        return self.score_revs_norms 
+        
+    def getScoresRevs(self):
+        return self.score_revs
     
-    return score_revs, score_utils, score_prods
+    def getScoresUtils(self):
+        return self.score_utils
+    
+    def getScoresProds(self):
+        return self.score_prods
+    
+    def getScoresRevsNorms(self):
+        return self.score_revs_norms
+
+
+#rg = ReviewGraph(data, fields)
+#rg.computeScores(window=3, niter=10)
+#scores=rg.getScoresRevsNorms()
+#index_utils = fields.index('reviewerID')
+#index_prods = fields.index('asin')
+#index_revs = fields.index('reviewText')
+#index_spams = [ id for id, score in scores.items() if score < 25 ]
+#data_spams = { i : data[i] for i in index_spams }
+#utils_spams = [ d[index_utils] for k, d in data_spams.items() ]
+#prods_spams = [ d[index_prods] for k, d in data_spams.items() ]
+
+###################### DETECTION UTILISATEURS SUSPECTS
+
+"""
+# Dictionnaire du nombre de revues spams par utilisateur spam
+count = {} 
+for i in utils_spams: 
+    count[i] = count.get(i, 0) + 1
+"""
+
+""" # Afficher les utilisateurs ayant écrit plus de 3 revues spams
+for k, v in count.items():
+    if v > 2:
+        print( k )
+"""
+
+""" # l la liste des revues spams d'un auteur
+l=[]
+for i,d in data_spams.items():
+    if d[index_utils]== 'A5JLAU2ARJ0BO':
+        l.append(d)
+"""
+
+""" A5JLAU2ARJ0BO -> exemple très intéressant
+A2426K5QH04Q3Y
+A27QXQQOLAMRRR
+AWE3YLK1XV1GZ
+A206YBBT28XGPJ
+"""
+
+""" Retrouver toutes les revues des utilisateurs suspects
+cpt=0
+for d in data:
+    if d[index_utils]=='A5JLAU2ARJ0BO':
+        print(d)
+        print('\n')
+        cpt += 1
+print(cpt)
+"""
+
+###################### DETECTION PRODUITS SUSPECTS
+
+"""
+# Dictionnaire du nombre de revues spams par produit spam
+count = {} 
+for i in prods_spams: 
+    count[i] = count.get(i, 0) + 1
+"""
+
+""" # Afficher les utilisateurs ayant écrit plus de 3 revues spams
+for k, v in count.items():
+    if v > 2:
+        print( k )
+"""
+
+""" # l la liste des revues spams d'un produit
+l=[]
+for i,d in data_spams.items():
+    if d[index_prods]== 'B0002SYC5O':
+        l.append(d)
+"""
+
+""" B0002SYC5O
+"""
+
+
+""" 
+count_ps = {}
+for i in prods_spams: 
+    count_ps[i] = count_ps.get(i, 0) + 1
+    
+    
+    
+data_bis_spams = [d for d in data_bis if d in data_spams.values()]
+data_bis=[d for d in data if d[index_prods]=='B0002SYC5O']
+
+# Note moyenne de B0002SYC5O
+np.mean([ d[index_ratings] for d in data if d[index_prods]=='B0002SYC5O' ])  """
