@@ -63,7 +63,7 @@ def parse(filename, data_number):
         for index_label in range(len(fields)):
             if fields[index_label] in items.keys():
                 data[i][index_label] = items[fields[index_label]]
-        
+    file.close()    
     return data, fields
 
 ## Création du dataset
@@ -358,6 +358,10 @@ def docSansDoublon(data, fields, nomFichier):
         iAuteur=fields.index('reviewerName')
         if fields.index('reviewText'):
             iText = fields.index('reviewText')
+            if fields.index('asin'):
+                iProd = fields.index('asin')
+            else:
+                return 0
         else:
             return 0
     else:
@@ -370,7 +374,7 @@ def docSansDoublon(data, fields, nomFichier):
     
     for i in data:
         if i[iText]:
-            h = hash(i[iAuteur]+i[iText])
+            h = hash(i[iAuteur]+i[iText]+i[iProd])
         else:
             continue
         
@@ -382,8 +386,8 @@ def docSansDoublon(data, fields, nomFichier):
             cpt += 1
     
     # On affiche le nombre de doublons détectés
-    print('\n', str(cpt) , 'doublons non-spams (idReviewer - review) détectés')
-    
+    print('\n', str(cpt) , 'doublons non-spams (idReviewer - review- produit) détectés')
+    file.close()
     return data2
 
 
@@ -511,6 +515,25 @@ def detectFromBurstRD(data, fields, width, bins, seuil, window=4, height=50, dis
     
     return set(suspams_ids)
 
+
+def isolationProd(data,fields, n):
+    """ garde un certain nombre de produit"""
+    if fields.index("asin"):
+            iId = fields.index("asin")
+    else: return 0
+    
+    data2 =sorted(data, key=lambda x: x[iId])
+    res=[]
+    cpt=0
+    lastAsin = 0
+    for i in data:
+        if i[iId]!=lastAsin:
+            cpt+=1
+            lastAsin=i[iId]
+        if cpt>n:
+            break
+        res.append(i)
+    return res
 
 class ReviewGraph:
     """ Classe pour la propagation des scores utilisateur - score - produit
