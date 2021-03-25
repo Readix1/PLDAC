@@ -12,4 +12,5 @@ similarité cosinus
 
 
 POUR FAIRE COMMANDE SUR PPTI 
-noup
+commande : noup
+/temp pas de quotas
