@@ -1,3 +1,4 @@
+LISTE DE MOT:
 dans le rapport 'main', ils font directement référence aux auteurs, d'abord detection des auteurs supervisé
 puis non supervisé
 bon ils ne detaillent pas dans le rapport peut etre que dans le code cest plus fourni
@@ -6,3 +7,9 @@ Detecting Product Review Spammers using RatingBehaviors
 
 sacs de mots
 similarité cosinus
+
+
+
+
+POUR FAIRE COMMANDE SUR PPTI 
+noup
