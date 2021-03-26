@@ -643,6 +643,11 @@ class ReviewGraph:
         #self.score_revs = { id_rev : -1 if id_rev in self.suspams_ids else 1 for id_rev in range(len(data)) }
         self.score_revs = { id_rev : 0 for id_rev in range( len( data ) ) }
         
+        # Liste des auteurs de revues en doublons ou dans un burst + déviation
+        for ids in self.suspams_ids.union(self.doublons_ids):
+            self.score_utils[data[ids][self.index_utils]] = -0.02
+            #self.score_prods[data[ids][self.index_prods]] = 0
+            
         # Création du dictionnaire des revues par mois: idRevsDate
         self.index_time = fields.index('reviewTime')
         self.idRevsDate = {}
@@ -764,7 +769,7 @@ class ReviewGraph:
         for i, d in self.db_prods[id_prod]:
             if self.score_utils[ d[self.index_utils] ] > 0:
                 theta += self.score_utils[ d[self.index_utils] ] * ( d[self.index_ratings] - median )
-
+        
         return ( 2 / ( 1 + np.exp(-theta) ) ) - 1
     
     def initScoreRevs(self):
@@ -776,13 +781,11 @@ class ReviewGraph:
         """
         score_entente = {}
         suspams = self.suspams_ids.intersection(self.doublons_ids)
-        print(' %d doublons spams dans bursts détectés: scores revues à -1' % len(suspams))
+        print('%d doublons spams dans bursts détectés' % len(suspams))
         
         for id_rev in range( len( self.data ) ):
             if id_rev in suspams:
                 score_entente[id_rev] = -1
-            elif id_rev in self.suspams_ids or id_rev in self.doublons_ids:
-                score_entente[id_rev] = -0.75
             else:
                 score_entente[id_rev] = self.A(id_rev, delta = 1)
         
@@ -847,7 +850,20 @@ class ReviewGraph:
             inférieur au seuil.
         """
         return [ k for k , v in self.score_revs.items() if v < seuil ]
+    
+    def get_k_worst(self, k):
+        """ Retourne la liste des k produits de plus mauvais scores.
+        """
+        # Tri dans l'ordre croissant des scores
+        scores_sorted = { k : v for k, v in sorted(self.score_prods.items(), key=lambda item: item[1]) }
+        return list( scores_sorted.keys() )[:k]
         
+    def get_k_best(self, k):
+        """ Retourne la liste des k produits de meilleurs scores.
+        """
+        # Tri dans l'ordre décroissant des scores
+        scores_sorted = { k : v for k, v in sorted(self.score_prods.items(), key=lambda item: item[1], reverse=True) }
+        return list( scores_sorted.keys() )[:k]
     
     def prod_timeline(self, id_prod):
         """ Trace l'évolution des notes des notes d'un produit dans le temps.
@@ -871,8 +887,7 @@ class ReviewGraph:
         
         # Plot le nombre de review par mois
         liste_annees = [ t[0] for t in times_normalized ]
-        print(len(liste_annees))
-        input()
+
         liste_annees = [ i for i in range(min(liste_annees), max(liste_annees) + 1) ]
         liste_mois = [ i for i in range(1,13) ]
         
@@ -884,8 +899,20 @@ class ReviewGraph:
             index = liste_annees.index(annee)*len(liste_mois) + liste_mois.index(mois)
             X[index] = X[index] + [data_prod[i][0]]
         
+        # On moyenne sur les 10 derniers produits
+        X_flattened = [ note for notes_mois in X for note in notes_mois ]
+        
+        X_mean = copy.deepcopy(X)
+        k = 0
+        for i in range(len(X)):
+            if X[i] != []:
+                for j in range(len(X[i])):
+                    X_mean[i][j] = np.mean( X_flattened[ max(0,k-5) : min( k+5 , len(X_flattened)) ])
+                    k += 1
+        
         # On moyenne pour chaque mois
         X = [ np.mean(X[i]) if X[i] != [] else 0 for i in range(len(X)) ]
+        X_mean = [ np.mean(X_mean[i]) if X_mean[i] != [] else 0 for i in range(len(X_mean)) ]
         
         # Revues de produit suspectes
         susrevs = self.detect_susrevs(seuil=-0.75)
@@ -913,12 +940,13 @@ class ReviewGraph:
             Y[index] += 1     
         
         # ------- Moyenne mobile
-        mm = moyenneMobile(X, 5)
+        mm = moyenneMobile(X, 4)
         
         # ------- AFFICHAGE
         plt.figure()
-        plt.plot(X)
-        plt.plot(mm)
+        plt.plot(X, color='khaki')
+        #plt.plot(X_mean, color='red')
+        plt.plot(mm, color='gold')
         for e in Y:
             if e != 0:
                 plt.scatter(Y.index(e), 0, s=1)
@@ -934,10 +962,10 @@ class ReviewGraph:
     
     def getScoresRevsNorms(self):
         return self.score_revs_norms
+    
 
 
-#data, fields = parse('data/data.json', 65000)
-#data = doublonsNonSpams(data, fields)
+#data, fields = parse('data/cellphones_accessories.json', data_number = 13000)
 #rg = ReviewGraph(data, fields, window = 1)
 #rg.computeScores(niter=10)
 #scores=rg.getScoresRevsNorms()
@@ -953,6 +981,10 @@ class ReviewGraph:
 
 #score_prods = rg.getScoresProds()
 #plt.hist( list( score_prods.values() ) )
+
+#rg.display_scores()
+#worst = rg.get_k_worst(5)
+#best = rg.get_k_best(5)
 
 ###################### DETECTION UTILISATEURS SUSPECTS
 
@@ -1116,5 +1148,17 @@ print(count)
 id_prod = susprods[np.argmax(count)]
 
 
+"""
 
+"""  Pour afficher les scores finaux des susmaps_ids, suspams (histogramme)
+
+score_revs = rg.getScoresRevs()
+suspams_ids = detectFromBurstRD(data, fields, width=6, bins=20, seuil=3.25, window=1, height=50, distance=10, display=False)
+doublons_ids = doublonsSpams(data, fields)
+suspams = suspams_ids.intersection(doublons_ids)
+
+score_suspams_ids = { i : score_revs[i] for i in suspams_ids }
+score_suspams = { i : score_revs[i] for i in suspams }
+
+sum( list( score_suspams_ids.values() ) )
 """
