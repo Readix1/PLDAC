@@ -5,18 +5,24 @@ Created on Sun Jan 31 10:57:05 2021
 @author: GIANG Cécile, LENOIR Romain
 """
 
-######################### IMPORTATION DES DONNEES #########################
+########################## IMPORTATION DES DONNEES ###########################
 
 import json
 import matplotlib.pyplot as plt
 import numpy as np
+import copy
 from sklearn.neighbors.kde import KernelDensity
+import seaborn as sns
 from scipy.signal import find_peaks
 
-import copy
+
+######################## NON-AFFICHAGE DES WARNINGS  #########################
+
+import warnings
+warnings.filterwarnings("ignore")
 
 
-######################### PREPARATION DES DONNEES #########################
+########################### PREPARATION DES DONNEES ##########################
 
 def parse(filename, data_number):
     """ Permet de parser un fichier de données Amazon et crée notre dataset.
@@ -160,7 +166,7 @@ def parse_some(to_read, to_save, nprods = 500):
     return data, fields
 
 
-###################### DETECTION DE BURST DE REVIEWS ######################
+####################### DETECTION DE BURST DE REVIEWS ########################
 
 # Détection de bursts de reviews, qui indiquent des périodes de temps pendant
 # lesquelles le nombre de reviews postés est anormalement élevé, et où l'on
@@ -353,7 +359,6 @@ def deviationNotes(data, fields, width, bins, seuil):
     
     # retourner les dates des reviews dont la déviation est de plus de 3,25
     indices_suspect = np.where(deviation_notes >= seuil)[0]
-    ####### COMMENT DETERMINER LES NOTES A DISCRIMINER #######
 
     return [indices_sorted[i] for i in indices_suspect]
 
@@ -588,9 +593,6 @@ def detectFromBurstRD(data, fields, width, bins, seuil, window=4, height=50, dis
             
         plt.show()
     
-    
-    # suspams_ids: Liste des indices des reviews suspectes dans data
-    
     # Temps sous la forme 'mois jour, annee'
     index_time = fields.index('reviewTime')
     times = [d[index_time] for d in data]
@@ -605,10 +607,21 @@ def detectFromBurstRD(data, fields, width, bins, seuil, window=4, height=50, dis
     liste_mois = sorted( np.unique( [t[1] for t in tn] ) )
     liste_jours = sorted( np.unique( [t[2] for t in tn] ) )
     
+    # suspams_ids: Liste des indices des reviews suspectes dans data
     suspams_ids = [i for i in range(len(data)) if liste_annees.index(tn[i][0])*len(liste_mois) + liste_mois.index(tn[i][1]) in suspams]
     
     return set(suspams_ids)
 
+
+######## ALGORITHME TYPE PAGERANK POUR LA DETECTION DE REVIEWS SPAMS #########
+
+# La classe ci-dessous implémente un algorithme de type PageRank dont le but 
+# est d'attribuer un score de spammicité aux produits, utilisateurs et revues.
+# Comprises entre -1 et 1, ces scores de spammicité indiquent dans le cas où le
+# score est très proche de -1:
+#   * un produit attaqué par des utilisateurs malhonnêtes
+#   * des utilisateurs malhonnêtes
+#   * des revues spams
 
 class ReviewGraph:
     """ Classe pour la propagation des scores utilisateur - score - produit
@@ -639,10 +652,12 @@ class ReviewGraph:
         self.score_prods = { id_prod : 1 for id_prod in unique_prods }
         
         # H: Review honesty (score review): initialisation selon le score d'entente
-        #self.suspams_ids = self.suspams_ids.union(doublons(data, fields))
-        #self.score_revs = { id_rev : -1 if id_rev in self.suspams_ids else 1 for id_rev in range(len(data)) }
         self.score_revs = { id_rev : 0 for id_rev in range( len( data ) ) }
         
+        # Liste des auteurs de revues en doublons ou dans un burst + déviation
+        for ids in self.suspams_ids.union(self.doublons_ids):
+            self.score_utils[data[ids][self.index_utils]] = -0.02 # biais
+            
         # Création du dictionnaire des revues par mois: idRevsDate
         self.index_time = fields.index('reviewTime')
         self.idRevsDate = {}
@@ -743,11 +758,10 @@ class ReviewGraph:
             else:
                 cpt_dif += self.score_utils[self.data[i][self.index_utils]]
         
-        #print('cpt_sim = ', cpt_sim, '  :  cpt_dif = ', cpt_dif )
         # Calcul et normalisation du score d'entente
         a = cpt_sim - cpt_dif
         a = ( 2 / ( 1 + np.exp(-a) ) ) - 1
-        #print(a)
+        
         return a
     
     def H(self, id_rev, delta = 1):
@@ -764,25 +778,23 @@ class ReviewGraph:
         for i, d in self.db_prods[id_prod]:
             if self.score_utils[ d[self.index_utils] ] > 0:
                 theta += self.score_utils[ d[self.index_utils] ] * ( d[self.index_ratings] - median )
-
+        
         return ( 2 / ( 1 + np.exp(-theta) ) ) - 1
     
     def initScoreRevs(self):
         """ Initialisation des scores revues.
             Valeurs:
                 * -1 si à la fois doublon, dans un burst et note déviante.
-                * -0.75 si doublon ou note déviante
+                * -0.75 si doublon ou note déviante (variante)
                 * sinon: selon le score d'entente
         """
         score_entente = {}
         suspams = self.suspams_ids.intersection(self.doublons_ids)
-        print(' %d doublons spams dans bursts détectés: scores revues à -1' % len(suspams))
+        print('%d doublons spams dans bursts détectés' % len(suspams))
         
         for id_rev in range( len( self.data ) ):
             if id_rev in suspams:
                 score_entente[id_rev] = -1
-            elif id_rev in self.suspams_ids or id_rev in self.doublons_ids:
-                score_entente[id_rev] = -0.75
             else:
                 score_entente[id_rev] = self.A(id_rev, delta = 1)
         
@@ -847,10 +859,24 @@ class ReviewGraph:
             inférieur au seuil.
         """
         return [ k for k , v in self.score_revs.items() if v < seuil ]
+    
+    def get_k_worst(self, k):
+        """ Retourne la liste des k produits de plus mauvais scores.
+        """
+        # Tri dans l'ordre croissant des scores
+        scores_sorted = { k : v for k, v in sorted(self.score_prods.items(), key=lambda item: item[1]) }
+        return list( scores_sorted.keys() )[:k]
         
+    def get_k_best(self, k):
+        """ Retourne la liste des k produits de meilleurs scores.
+        """
+        # Tri dans l'ordre décroissant des scores
+        scores_sorted = { k : v for k, v in sorted(self.score_prods.items(), key=lambda item: item[1], reverse=True) }
+        return list( scores_sorted.keys() )[:k]
     
     def prod_timeline(self, id_prod):
-        """ Trace l'évolution des notes des notes d'un produit dans le temps.
+        """ Trace l'évolution de la moyenne des notes d'un produit dans le 
+            temps. Prend en compte toutes les notes depuis le début.
         """
         # On isole les données concernant le produit
         data_prod = [ d for d in self.data if d[self.index_prods] == id_prod ]
@@ -871,8 +897,7 @@ class ReviewGraph:
         
         # Plot le nombre de review par mois
         liste_annees = [ t[0] for t in times_normalized ]
-        print(len(liste_annees))
-        input()
+
         liste_annees = [ i for i in range(min(liste_annees), max(liste_annees) + 1) ]
         liste_mois = [ i for i in range(1,13) ]
         
@@ -884,44 +909,28 @@ class ReviewGraph:
             index = liste_annees.index(annee)*len(liste_mois) + liste_mois.index(mois)
             X[index] = X[index] + [data_prod[i][0]]
         
-        # On moyenne pour chaque mois
-        X = [ np.mean(X[i]) if X[i] != [] else 0 for i in range(len(X)) ]
         
-        # Revues de produit suspectes
-        susrevs = self.detect_susrevs(seuil=-0.75)
+        # Pour chaque mois, on calcule la moyenne depuis le début jusqu'à maintenant
+        X_mean = [ np.mean([ e for x in X[: i + 1] for e in x ]) for i in range(len(X))]
+        X_mean = [ x if not np.isnan(x) else 0 for x in X_mean ]
         
-        data_prod_sus = []
-        for rev in susrevs:
-            if self.data[rev][self.index_prods]==id_prod:
-                data_prod_sus.append(rev)
+        # Histogramme du nombre de revues par mois
+        X_hist = [ [i] * len(X[i]) for i in range(len(X)) ]
+        X_hist = [ e for x in X_hist for e in x ]
         
-        # Temps sous la forme 'mois jour, annee'
-        times = [self.data[d][index_time] for d in data_prod_sus]
+         # ------- AFFICHAGE
+        fig = plt.figure(figsize=(20,5))
+        plt.title('Product timeline idprod = %s' %id_prod, y = 1.2)
+        plt.axis('off')
         
-        # Normalisation sous la forme (annee, mois, jour)
-        times_normalized = []
-        for t in times:
-            mois, jour, annee = t.split()
-            times_normalized.append((int(annee), int(mois), int(jour.strip(','))))
+        ax1 = fig.add_subplot(121)
+        ax1.title.set_text('Evolution de la note moyenne dans le temps')
+        ax1.set_ylim([0,5])
+        ax1 = plt.plot(X_mean, color='midnightblue')
         
-        # Y: indice des revues suspectes
-        Y = [0] * (len(liste_annees) * len(liste_mois))
-        
-        for i in range(len(times_normalized)):
-            annee, mois, jour = times_normalized[i]
-            index = liste_annees.index(annee)*len(liste_mois) + liste_mois.index(mois)
-            Y[index] += 1     
-        
-        # ------- Moyenne mobile
-        mm = moyenneMobile(X, 5)
-        
-        # ------- AFFICHAGE
-        plt.figure()
-        plt.plot(X)
-        plt.plot(mm)
-        for e in Y:
-            if e != 0:
-                plt.scatter(Y.index(e), 0, s=1)
+        ax2 = fig.add_subplot(122)
+        ax2.title.set_text('Nombre de revues par mois')
+        ax2 = plt.hist(X_hist, color='lightsteelblue')
         
     def getScoresRevs(self):
         return self.score_revs
@@ -936,185 +945,334 @@ class ReviewGraph:
         return self.score_revs_norms
 
 
-#data, fields = parse('data/data.json', 65000)
-#data = doublonsNonSpams(data, fields)
-#rg = ReviewGraph(data, fields, window = 1)
-#rg.computeScores(niter=10)
-#scores=rg.getScoresRevsNorms()
-#index_utils = fields.index('reviewerID')
-#index_prods = fields.index('asin')
-#index_revs = fields.index('reviewText')
-#index_spams = [ id for id, score in scores.items() if score < 25 ]
-#data_spams = { i : data[i] for i in index_spams }
-#utils_spams = [ d[index_utils] for k, d in data_spams.items() ]
-#prods_spams = [ d[index_prods] for k, d in data_spams.items() ]
-#notes = list( rg.getScoresRevsNorms().values() )
-#plt.hist(notes)
 
-#score_prods = rg.getScoresProds()
-#plt.hist( list( score_prods.values() ) )
+############ PARTIE TAL: IMPORTATION DES LIBRAIRIES ET MODULES ###############
 
-###################### DETECTION UTILISATEURS SUSPECTS
+import string
+import unicodedata
 
-"""
-# Dictionnaire du nombre de revues spams par utilisateur spam
-count = {} 
-for i in utils_spams: 
-    count[i] = count.get(i, 0) + 1
-"""
+from nltk.corpus import stopwords as stopwords
+from nltk.stem.snowball import SnowballStemmer
 
-""" # Afficher les utilisateurs ayant écrit plus de 3 revues spams
-for k, v in count.items():
-    if v > 2:
-        print( k )
-"""
-
-""" # l la liste des revues spams d'un auteur
-l=[]
-for i,d in data_spams.items():
-    if d[index_utils]== 'A5JLAU2ARJ0BO':
-        l.append(d)
-"""
-
-""" A5JLAU2ARJ0BO -> exemple très intéressant
-A2426K5QH04Q3Y
-A27QXQQOLAMRRR
-AWE3YLK1XV1GZ
-A206YBBT28XGPJ
-"""
-
-""" Retrouver toutes les revues des utilisateurs suspects
-cpt=0
-for d in data:
-    if d[index_utils]=='A5JLAU2ARJ0BO':
-        print(d)
-        print('\n')
-        cpt += 1
-print(cpt)
-"""
-
-###################### DETECTION PRODUITS SUSPECTS
-
-"""
-# Dictionnaire du nombre de revues spams par produit spam
-count = {} 
-for i in prods_spams: 
-    count[i] = count.get(i, 0) + 1
-"""
-
-""" # Afficher les utilisateurs ayant écrit plus de 3 revues spams
-for k, v in count.items():
-    if v > 2:
-        print( k )
-"""
-
-""" # l la liste des revues spams d'un produit
-l=[]
-for i,d in data_spams.items():
-    if d[index_prods]== 'B0002SYC5O':
-        l.append(d)
-"""
-
-""" B0002SYC5O
-"""
+from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
+from sklearn.linear_model import SGDClassifier
 
 
-""" 
-count_ps = {}
-for i in prods_spams: 
-    count_ps[i] = count_ps.get(i, 0) + 1
+################ DETECTION D'ATTAQUES PAR DES TECHNIQUES TAL #################
+
+class TextProcessor:
+    """ Classe pour pré-traiter les données textuelles (revues dans notre cas)
+        avant d'appliquer des méthodes discriminantes ou de clustering.
+    """
+    def __init__(self, corpus):
+        """ Constructeur de la classe TextProcessor.
+            @param corpus: str array, corpus de textes
+        """
+        self.corpus= corpus
+        self.vectorizer = None
+        self.sim_matrix = None
+        self.sim_threshold = None
+        self.sum_sim_threshold = None
+        self.coef_ = None
+        self.main_features = None
     
+    def process(self, language='english', lower=True, remove_punc=True, remove_digits=True, normalize=True, remove_stopwords=True, stemming=True):
+        """ Pré-traitement paramétré du corpus de textes passé en argument.
+            @param language: str, langage utilisé (utile pour les stopwords)
+            @param lower: bool, True si l'on met tout le texte en minuscule
+            @param remove_punc: bool, True si l'on supprime la ponctuation
+            @param remove_digits: bool, True si l'on supprime les chiffres
+            @param normalize: bool, True si l'on normalise le texte
+            @param remove_stopwords: bool, True si l'on supprime les stopwords
+            @param stemming: bool, True si l'on applique le stemming
+        """
+        # Liste des ponctuations à supprimer
+        punc = string.punctuation + '\n\r\t'
+        
+        # Liste des stopwords à supprimer (en anglais)
+        english_stopwords = set(stopwords.words(language))
+        
+        # Stemmer anglais
+        stemmer = SnowballStemmer(language, ignore_stopwords=True)
+        
+        # Copie profonde du corpus de textes
+        self.processed_corpus = copy.deepcopy(self.corpus)
+        
+        for i in range(len(self.corpus)):
+            text = self.processed_corpus[i]
+            if lower: text = text.lower()
+            if remove_punc: text = text.translate(str.maketrans(punc, ' ' * len(punc)))
+            if remove_digits: text = text.translate(str.maketrans('', '', string.digits))
+            if normalize: text = unicodedata.normalize(u'NFKD', text).encode('ascii', 'ignore').decode('utf8')
+            if remove_stopwords: text = ' '.join([ word for word in text.split() if word not in english_stopwords ])
+            if stemming: text = ' '.join([ stemmer.stem(word) for word in text.split() ])
+            self.processed_corpus[i] = text
+        
+        return self.processed_corpus
     
+    def vectorize(self, vtype='count', analyzer='word', ngram_range=(1,1)):
+        """ Calcule les représentations de chaque texte du corpus pré-traité 
+            sous forme de sacs de mots. L'attribut self.X renvoyé correspond à
+            la matrice des représentations, et self.features aux mots retenus.
+            Pour éviter de se retrouver par la suite avec des similarités trop
+            faibles dues au bruit, on ne gardera pas les mots n'apparaissant 
+            qu'une seule fois dans tout le corpus.
+            @param vtype: str ('count' ou 'tf-idf'), spécifie le type de 
+                          représentation souhaité
+            @param analyzer: str ('word' ou 'char'), spécifie la granularité
+            @param ngram_range: (min:int, max:int), intervalle de n-grams
+        """
+        if vtype == 'count':
+            self.vectorizer = CountVectorizer(analyzer=analyzer, ngram_range=ngram_range, min_df=2)
+        if vtype == 'tf-idf':
+            self.vectorizer = TfidfVectorizer(analyzer=analyzer, ngram_range=ngram_range, min_df=2)
+        
+        # Représentation des documents et dimensions (n-grams)
+        self.X = self.vectorizer.fit_transform(self.processed_corpus)
+        self.features = self.vectorizer.get_feature_names()
+        
+        return self.X, self.features 
+        
+    def cosine_similarity(self, X, Y, decimals = 4):
+        """ Calcule la similarité cosinus entre deux vecteurs X et Y.
+            @param X: float array, vecteur (d'occurrences ou tf-idf)
+            @param Y: float array, vecteur (d'occurrences ou tf-idf)
+            @param decimals: int, nombre de décimales gardées
+            @return : float, score de similarité entre X et Y
+        """
+        return round( np.dot(X,Y) / (np.linalg.norm(X) * np.linalg.norm(Y)) , decimals )
     
-data_bis_spams = [d for d in data_bis if d in data_spams.values()]
-data_bis=[d for d in data if d[index_prods]=='B0002SYC5O']
+    def similarity_matrix(self, decimals = 4):
+        """ Retourne la matrice de similarité sur tous les textes du corpus
+            pré-traité. La métrique utilisée est la similarité cosinus.
+            On fait attention à ne pas prendre en compte la diagonale (0).
+            @param decimals: int, nombre de décimales gardées
+            @return sim_matrix: (float) array x array, matrice de similarité
+        """
+        if self.vectorizer == None:
+            raise ValueError('Cannot compute similarity matrix when vectorizer does not exist. Do make sure to use TextProcessor.vectorize function beforehand.')
+        
+        # Représentation des documents sous forme d'array
+        X = self.X.toarray()
+        
+        # Initialisation de la matrice de similarités
+        ntxt = len(X) # Nombre de textes dans le corpus
+        self.sim_matrix = np.zeros((ntxt,ntxt))
+        
+        for i in range(ntxt):
+            for j in range(ntxt):
+                if i != j:
+                    self.sim_matrix[i][j] = self.cosine_similarity( X[i], X[j], decimals=decimals )
+        
+        # Remplacer les valeurs NaN par 0.
+        np.nan_to_num(self.sim_matrix, copy=False, nan=0.0)
+        
+        return self.sim_matrix
+    
+    def similarity_threshold(self, threshold, decimals = 4):
+        """ Retourne la matrice de similarité sur tous les textes du corpus
+            pré-traité, à laquelle on a appliqué un seuil. Elle vaut 1 en les
+            points où le score de similarité est au moins égal au seuil.
+            @param threshold: float, seuil
+            @param decimals: int, nombre de décimales gardées
+            @return self.sim_threshold: (float) array x array, matrice de 
+                                        similarité seuillée
+        """
+        self.sim_matrix = self.similarity_matrix(decimals=decimals)
+        self.sim_threshold = copy.deepcopy(self.sim_matrix)
+        
+        # Seuillage
+        self.sim_threshold[ self.sim_matrix < threshold ] = 0
+        self.sim_threshold[ self.sim_matrix >= threshold ] = 1
+        
+        return self.sim_threshold
+    
+    def overall_threshold(self, threshold):
+        """ Cette fois-ci, on travaille depuis la patrice de similarité seuillée.
+            La fonction retourne 1 si la somme (seuillée) des similarités sur 
+            un document est au moins égale au seuil epsilon.
+            @param threshold: int, seuil
+        """
+        if self.sim_threshold.all() == None:
+            raise ValueError('Cannot compute overall threshold when thresholded similarity matrix has yet to be computed. Please use TextProcessor.similarity_threshold function beforehand.')
+        
+        self.sum_sim_threshold = np.sum(self.sim_threshold, axis=1)
+        self.sum_sim_threshold[ self.sum_sim_threshold < threshold ] = 0
+        self.sum_sim_threshold[ self.sum_sim_threshold >= threshold ] = 1
+        
+        return self.sum_sim_threshold
+    
+    def feature_importance(self, coef, features, top_features=5):
+        """ Pour un aperçu visuel des features les plus importants.
+        """
+        coef_ = coef.ravel()
+         
+        # Features importants pour chaque classe
+        top_positive_coefficients = np.argsort(coef_)[-top_features:]
+        top_negative_coefficients = np.argsort(coef_)[:top_features]
+        top_coefficients = np.hstack([top_negative_coefficients, top_positive_coefficients])
+        
+        # Affichage des features les plus importants
+        plt.figure(figsize=(15, 5))
+        plt.title('Features discriminants ', y = 1.2 )
+        colors = ['palegreen' if c < 0 else 'thistle' for c in coef_[top_coefficients]]
+        plt.bar(np.arange(2 * top_features), coef[top_coefficients], color=colors)
+        features = np.array(features)
+        plt.xticks(np.arange(1, 1 + 2 * top_features), features[top_coefficients], rotation=60, ha='right')
+        plt.show()
+    
+    def discriminant_features(self, display=True, top_features=5):
+        """ Retrouve les mots (n-grams) discriminants en appliquant un classifieur
+            SVM linéaire avec une régularisation Elastic Net.
+        """
+        if self.sum_sim_threshold.all() == None:
+            raise ValueError('Cannot apply SVM linear model on non-existing data. Please use TextProcessor.overall_threshold beforehand.')
+        
+        # Données d'apprentissage
+        xtrain = self.X.toarray()
+        ytrain = self.sum_sim_threshold
+        
+        # Phase d'apprentissage
+        clf = SGDClassifier(loss='hinge', penalty='elasticnet')
+        clf.fit(xtrain, ytrain)
+        self.coef_ = clf.coef_[0]
+        
+        # Sélection des attributs dscriminants (mots, n-grams)
+        self.main_features = [ self.features[i] for i in range(len(self.coef_)) if self.coef_[i] > 0 ]
+        
+        if display:
+            self.feature_importance(self.coef_, self.features, top_features)
+        
+        return self.main_features
+    
+def prod_revs_per_month(data, fields, id_prod):
+    """ Renvoie le dictionnaire des revues concernant le produit id_prod indexé
+        par mois.
+        @param id_prod: str, identifiant produit
+        @return prod_revs: dict(str, list(str)), dictionnaire des revues par mois
+    """
+    # Indices des identifiants produits et des dates de publication dans fields
+    index_prods = fields.index('asin')
+    index_time = fields.index('reviewTime')
+    index_revs = fields.index('reviewText')
+    
+    # Liste des revues concernant le produit id_prod, triée chronologiquement
+    data_prod = [ d for d in data if d[index_prods] == id_prod ]
+    data_prod = sortReviewsByTime(data_prod, fields)[0]
+    
+     # Temps sous la forme 'mois jour, annee'
+    times = [d[index_time] for d in data_prod]
+            
+    # Normalisation sous la forme (annee, mois, jour)
+    times_normalized = []
+    for t in times:
+        mois, jour, annee = t.split()
+        times_normalized.append((int(annee), int(mois)))
+    
+    # On prend aussi en compte les mois avec 0 revues
+    liste_annees = [ time[0] for time in times_normalized ]
+    liste_annees = [ i for i in range(min(liste_annees), max(liste_annees) + 1) ]
+    liste_mois = [ i for i in range(1,13) ]
+        
+    # all_times: moyenne des notes par mois
+    all_times = [ (annee, mois) for annee in liste_annees for mois in liste_mois ]
+    
+    # Initialisation du dictionnaire des revues par mois
+    prod_revs = { time : [] for time in all_times }
+    
+    for rev in data_prod:
+        mois, jour, annee = rev[index_time].split()
+        prod_revs[ (int(annee), int(mois)) ].append( rev[index_revs] )
+    
+    return prod_revs
 
-# Note moyenne de B0002SYC5O
-np.mean([ d[index_ratings] for d in data if d[index_prods]=='B0002SYC5O' ])  """
+
+def create_corpus(data, fields, id_prod, month_min, month_max):
+    """ Crée le corpus de revues du produit id_prod entre les mois month_min 
+        et month_max.
+    """
+    corpus = []
+    prod_revs = prod_revs_per_month(data, fields, id_prod)
+   
+    keys = list( prod_revs.keys() )
+    for i in range(month_min, month_max):
+        corpus += prod_revs[keys[i]]
+        
+    print('Création du corpus pour le produit {} entre les mois {} et {}: {} revues\n' . format(id_prod, month_min, month_max, len(corpus)))
+    return corpus
 
 
+def etude(data, fields, id_prod, month_min=None, month_max=None, vtype='tf-idf', analyzer='word', ngram_range=(1,1), display_features=True, top_features=5):
+    """ Première méthode proposée.
+    """
+    corpus = create_corpus(data, fields, id_prod, month_min, month_max)
+    
+    tp = TextProcessor(corpus)
+    tp.process(lower=True, remove_punc=True, remove_digits=True, normalize=True, remove_stopwords=True, stemming=True)
+    X, features = tp.vectorize(vtype=vtype, analyzer=analyzer, ngram_range=ngram_range)
+    
+    sim_matrix = tp.similarity_matrix()
 
+    # On prend comme seuil la moyenne sur la mesure de similarité
+    #sim_threshold = tp.similarity_threshold( threshold = np.mean(sim_matrix) )
+    threshold = 0.7
+    sim_threshold = tp.similarity_threshold( threshold = threshold )
+    
+    # On prend comme seuil la moyenne sur les sommes de similarité pour chaque revue
+    #sum_sim_threshold = tp.overall_threshold( threshold = np.mean(np.sum(sim_threshold, axis=1)) )
+    sum_sim_threshold = tp.overall_threshold( threshold = 2 )
+    
+    # Affichage des matrices de similarité
+    fig = plt.figure(figsize=(20,5))
+    plt.title('Matrices de similarité, id_prod = %s' % id_prod, y = 1.2)
+    plt.axis('off')
+        
+    ax1 = fig.add_subplot(121)
+    ax1.title.set_text('sim_matrix')
+    ax1 = plt.imshow(sim_matrix, cmap='Greens', vmin=0, vmax=1)
+        
+    ax2 = fig.add_subplot(122)
+    ax2.title.set_text('sim_threshold, seuil à %f' % threshold)
+    ax2 = plt.imshow(sim_threshold, cmap='Greens', vmin=0, vmax=1)
+    
+    # Affichage des features discriminants
+    main_features = tp.discriminant_features(display=True, top_features=top_features)
+    
+    #for i in range(len(sum_sim_threshold)):
+    #    if sum_sim_threshold[i]==1:
+    #        print('\n\n', corpus[i])
+    
+    return tp
 
-""" 
+############################# MAIN INSTRUCTIONS ##############################
 
+# --- ETAPE 1: Parsing du fichier json
+# data, fields = parse('data/data.json', 65000)
 
+# --- ETAPE 2: Algorithme PageRank et spammicité
+# rg = ReviewGraph(data, fields, window = 1)
+# rg.computeScores(niter=50)
+# worst = rg.get_k_worst(50)
+# best = rg.get_k_best(50)
 
-np.where(np.array(list(score_prods.values()))<-0.2)
+# --- ETAPE 3: TAL
+# tp = TextProcessor(corpus)
+# tp.process(lower=True, remove_punc=True, remove_digits=True, normalize=True, remove_stopwords=True, stemming=True)
+# tp.vectorize(vtype='tf-idf', analyzer='word', ngram_range=(1,1))
+# sim_matrix = tp.similarity_matrix()
+# sim_threshold = tp.similarity_threshold(threshold=0)
+# sum_sim_threshold = tp.overall_threshold(threshold=6)
 
->> (array([101, 127, 139], dtype=int64),)
+""" Pour récupérer un corpus de revues:
 
-
-list(score_prods.keys())[101]
-Out[273]: 'B00008O39I'
-
-
-
-data_bis = [ d for d in data if d[index_prods]=='B00008O39I']
-
-
-
-
-
-A FAIRE: ISOLER LES PRODUITSTSTSTSTSTSTSTSTSTT
-
-
-
-
-
+corpus = create_corpus(data, fields, id_prods, month_min, month_max)
 """
 
+# Elimination des mots rares (n'apparassant que dans un document) pour éliminer le bruit ?
+# Comment fixer le seuil threshold ? Dépend de la taille du vocabulaire ou du corpus ?
 
-"""
-count = {} 
-for d in data: 
-    count[d[index_prods]] = count.get(d[index_prods], 0) + 1
-
-prods = [ k for k, v in count.items() if v >= 100]
-data_bis = [d for d in data if d[index_prods] in prods]
-
-
-
-"""
-
-""" EXPLICATION DU PROBLEME
-
-D'où vient notre problème ?
-- cpt_sim et cpt_dif très élevés, même avec un delta à 2
-- on essaie de réduire la fenêtre de temps ?
-
-
---> réduire la fenêtre de temps: window = 1
---> augmenter delta
---> vérifier que neighs ne contient bien que des reveurs sur les mêmes produits
---> changer le lambda de la fonction sigmoide ? fonction tanh ?
---> normaliser la différence (cpt_sim-ct_diff) et on change la pente de la fonction
-    sigmoide ?
-
-X = np.linspace(-1000,1000,1000)
-Y = [ (2 / (1+np.exp(-0.01*x)))-1 for x in X ]
-#Y = [np.tanh(x) for x in X]
-plt.figure()
-plt.title('Fonction (2 / (1 - exp(-x))) - 1')
-plt.xlabel('x')
-plt.ylabel('f(x)')
-plt.plot(X,Y,color='lavender')
-
-"""
-
-""" 
-Trouver des produits suspects
-
-susprods = rg.detect_susprods(seuil=-0.95)
-count=[0]*len(susprods)
-for i in range(len(susprods)):
-    prod=susprods[i]
-    for d in data:
-        if d[index_prods]==prod:
-            count[i] += 1
-print(count)
-
-id_prod = susprods[np.argmax(count)]
-
-
-
+""" id_prods: B00009WCAP, 9707716436
+rg.prod_timeline(id_prod)
+tp = etude(data, fields, id_prod, month_min=100, month_max=130, vtype='tf-idf', analyzer='word', ngram_range=(2,2), display_features=True)
+tp.coef_
 """
