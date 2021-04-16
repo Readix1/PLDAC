@@ -955,6 +955,7 @@ from nltk.corpus import stopwords as stopwords
 from nltk.stem.snowball import SnowballStemmer
 
 from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 from sklearn.linear_model import SGDClassifier
 
 
@@ -1187,12 +1188,17 @@ def prod_revs_per_month(data, fields, id_prod):
     return prod_revs
 
 
-def create_corpus(data, fields, id_prod, month_min, month_max):
+def create_corpus(data, fields, id_prod, month_min=None, month_max=None):
     """ Crée le corpus de revues du produit id_prod entre les mois month_min 
         et month_max.
     """
     corpus = []
     prod_revs = prod_revs_per_month(data, fields, id_prod)
+    
+    if month_min == None:
+        month_min = 0
+    if month_max == None:
+        month_max = len(prod_revs)
    
     keys = list( prod_revs.keys() )
     for i in range(month_min, month_max):
@@ -1202,7 +1208,7 @@ def create_corpus(data, fields, id_prod, month_min, month_max):
     return corpus
 
 
-def etude(data, fields, id_prod, month_min=None, month_max=None, vtype='tf-idf', analyzer='word', ngram_range=(1,1), display_features=True, top_features=5):
+def etude_1(data, fields, id_prod, month_min=None, month_max=None, vtype='tf-idf', analyzer='word', ngram_range=(1,1), display_features=True, top_features=5):
     """ Première méthode proposée.
     """
     corpus = create_corpus(data, fields, id_prod, month_min, month_max)
@@ -1211,16 +1217,26 @@ def etude(data, fields, id_prod, month_min=None, month_max=None, vtype='tf-idf',
     tp.process(lower=True, remove_punc=True, remove_digits=True, normalize=True, remove_stopwords=True, stemming=True)
     X, features = tp.vectorize(vtype=vtype, analyzer=analyzer, ngram_range=ngram_range)
     
+    # Calcul et affichage de la matrice de similarité cosinus
     sim_matrix = tp.similarity_matrix()
-
-    # On prend comme seuil la moyenne sur la mesure de similarité
-    #sim_threshold = tp.similarity_threshold( threshold = np.mean(sim_matrix) )
-    threshold = 0.7
-    sim_threshold = tp.similarity_threshold( threshold = threshold )
     
-    # On prend comme seuil la moyenne sur les sommes de similarité pour chaque revue
-    #sum_sim_threshold = tp.overall_threshold( threshold = np.mean(np.sum(sim_threshold, axis=1)) )
-    sum_sim_threshold = tp.overall_threshold( threshold = 2 )
+    # On demande à fixer un seuil sur la mesure de similarité
+    plt.figure()
+    plt.title('Histogramme sur la similarité cosinus')
+    plt.hist( np.max(sim_matrix, axis=1), color='lightsteelblue' )
+    plt.show()
+    
+    threshold_1 = float( input('Seuil sur la similarité: ') )
+    sim_threshold = tp.similarity_threshold( threshold = threshold_1 )
+    
+    # On demande à fixer un seuil sur la somme des similarités binaires
+    plt.figure()
+    plt.title('Histogramme sur la somme des similarités seuillées, seuil = %f' % threshold_1)
+    plt.hist( np.sum(sim_threshold, axis=1), color='lightsteelblue' )
+    plt.show()
+    
+    threshold_2 = float( input('Seuil sur la somme des similarités seuillées: ') )
+    sum_sim_threshold = tp.overall_threshold( threshold = threshold_2 )
     
     # Affichage des matrices de similarité
     fig = plt.figure(figsize=(20,5))
@@ -1232,7 +1248,7 @@ def etude(data, fields, id_prod, month_min=None, month_max=None, vtype='tf-idf',
     ax1 = plt.imshow(sim_matrix, cmap='Greens', vmin=0, vmax=1)
         
     ax2 = fig.add_subplot(122)
-    ax2.title.set_text('sim_threshold, seuil à %f' % threshold)
+    ax2.title.set_text('sim_threshold, seuil à %f' % threshold_1)
     ax2 = plt.imshow(sim_threshold, cmap='Greens', vmin=0, vmax=1)
     
     # Affichage des features discriminants
@@ -1244,6 +1260,44 @@ def etude(data, fields, id_prod, month_min=None, month_max=None, vtype='tf-idf',
     
     return tp
 
+
+def etude_2(data, fields, id_prod, month_min, month_max, vtype='tf-idf', analyzer='word', ngram_range=(1,1)):
+    """ Deuxième méthode proposée.
+    """
+    corpus = create_corpus(data, fields, id_prod)
+    
+    tp = TextProcessor(corpus)
+    tp.process(lower=True, remove_punc=True, remove_digits=True, normalize=True, remove_stopwords=True, stemming=True)
+    X, features = tp.vectorize(vtype=vtype, analyzer=analyzer, ngram_range=ngram_range)
+
+    # On labellise les données: 1 pour les revues se trouvant dans les bursts, 0 sinon
+    """ Revoir la labellisation burst: ne prendre que les revues détectées comme burst + déviation 
+        sur le produit
+    """
+    prod_revs = prod_revs_per_month(data, fields, id_prod)
+    burst_reviews = []
+    
+    keys = list( prod_revs.keys() )
+    for i in range(month_min, month_max):
+        burst_reviews += prod_revs[keys[i]]
+    
+    print('%d revues burst pour un corpus de taille %d.' % (len(burst_reviews), len(corpus)))
+    
+    Y = np.zeros(X.shape[0]) #labels
+    
+    for i in range(len(corpus)):
+        if corpus[i] in burst_reviews:
+            Y[i] = 1
+    
+    # LDA
+    #n_components = nombre de topics
+    lda = LDA(n_components=2)
+    X_lda = lda.fit_transform(X.toarray(), Y)
+    
+    print("Document 0: ")
+    for i,topic in enumerate(X_lda):
+      print("Topic ",i,": ",topic*100,"%")
+      
 ############################# MAIN INSTRUCTIONS ##############################
 
 # --- ETAPE 1: Parsing du fichier json
@@ -1275,4 +1329,22 @@ corpus = create_corpus(data, fields, id_prods, month_min, month_max)
 rg.prod_timeline(id_prod)
 tp = etude(data, fields, id_prod, month_min=100, month_max=130, vtype='tf-idf', analyzer='word', ngram_range=(2,2), display_features=True)
 tp.coef_
+"""
+
+# Comment utiliser LDA
+
+"""
+https://stackabuse.com/implementing-lda-in-python-with-scikit-learn/
+https://www.kaggle.com/rajmehra03/topic-modelling-using-lda-and-lsa-in-sklearn
+"""
+
+# 1ère méthode
+"""
+etude_1(data, fields, id_prods[2], month_min=100, month_max=130, vtype='tf-idf', analyzer='word', ngram_range=(2,2), display_features=True)
+worst: B000O8TWE8, B000KNJEV8 (bien), 9707716436 (mauvais)
+best: B00006JPBY, B0001J3UWU, B0002KRC5Y
+"""
+
+# 2è méthode
+""" 
 """
