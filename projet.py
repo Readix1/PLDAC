@@ -427,13 +427,30 @@ def showRDperMonth(data, fields, width, bins, seuil):
     
     # ------- AFFICHAGE
     plt.figure()
+    # Calculer l'histogramme
+    rpm = reviewPerMonth(data, fields)
+    hst = []
+    for n in range(len(rpm)):
+        if rpm[n] != 0:
+            hst += rpm[n] * [n]
+    
+    # Tracer l'histogramme
+    #plt.figure()
+    #plt.title('Nombre de revues par mois pour le produit')
+    plt.hist(hst, color = 'midnightblue')
+    plt.xlabel('Mois')
+    plt.ylabel('Nombre de revues')
+    
+    
     plt.plot(X)
     plt.plot(mm)
     for e in Y:
         if e != 0:
-            plt.scatter(Y.index(e), 0, s=1)
+            plt.scatter(Y.index(e), 0, s=20, zorder=2, color = 'red')
     
-    return X, Y
+    plt.show()
+    
+    return X, Y, mm
 
 
 def doublonsNonSpams(data, fields, nomFichier = 'doublons_non_spams.txt'):
@@ -552,7 +569,7 @@ def detectFromBurstRD(data, fields, width, bins, seuil, window=4, height=50, dis
                              spam (dans fenêtre de burst + déviation note)
     """
     # Première liste de reviews suspectes: reviews dans un burst temporel
-    X, Y = showRDperMonth(data, fields, width, bins, seuil)
+    X, Y, mm = showRDperMonth(data, fields, width, bins, seuil)
     X = np.array(X)
     Y = np.array(Y)
     
@@ -580,16 +597,56 @@ def detectFromBurstRD(data, fields, width, bins, seuil, window=4, height=50, dis
     
     # Affichage
     if display:
+        # Calculer l'histogramme
+        rpm = reviewPerMonth(data, fields)
+        hst = []
+        for n in range(len(rpm)):
+            if rpm[n] != 0:
+                hst += rpm[n] * [n]
+        
+        # ----------------- Premier graphe: pics de revues -------------------
+        
+        # Tracer l'histogramme
         plt.figure()
-        plt.title('Pics à prendre en compte')
+        plt.title('Bursts de revues à prendre en compte')
+        plt.hist(hst, color = 'midnightblue')
+        plt.xlabel('Mois')
+        plt.ylabel('Nombre de revues')
         
         # Affichage des pics
-        plt.plot(X)
-        plt.plot(peaks, X[peaks], "X")
+        plt.plot(X, color='palegreen')
+        plt.plot(peaks, X[peaks], "X", color='orange')
         
         # Affichage des reviews suspectées comme spam
         for r in suspams:
-            plt.scatter(r, 0, s=1)
+            plt.scatter(r, 0, s=10, zorder=2, color='red', clip_on=False)
+        plt.show()
+        
+        
+        # ---------------- Deuxième graphe: moyenne mobile -------------------
+        
+        plt.figure()
+        plt.title('Moyenne mobile et détection de revues spams')
+        
+        # Calculer l'histogramme
+        rpm = reviewPerMonth(data, fields)
+        hst = []
+        for n in range(len(rpm)):
+            if rpm[n] != 0:
+                hst += rpm[n] * [n]
+        
+        # Tracer l'histogramme
+        #plt.title('Nombre de revues par mois pour le produit')
+        plt.hist(hst, color = 'midnightblue')
+        plt.xlabel('Mois')
+        plt.ylabel('Nombre de revues')
+        
+        # Affichage des pics
+        plt.plot(mm, color='lightsteelblue')
+        
+        # Affichage des reviews suspectées comme spam
+        for r in suspams:
+            plt.scatter(r, 0, s=10, zorder=2, color='red', clip_on=False)
             
         plt.show()
     
@@ -1103,6 +1160,7 @@ class TextProcessor:
         
         return self.sum_sim_threshold
     
+    
     def feature_importance(self, coef, features, top_features=5):
         """ Pour un aperçu visuel des features les plus importants.
         """
@@ -1122,16 +1180,17 @@ class TextProcessor:
         plt.xticks(np.arange(1, 1 + 2 * top_features), features[top_coefficients], rotation=60, ha='right')
         plt.show()
     
-    def discriminant_features(self, display=True, top_features=5):
+    def discriminant_features(self, threshold=None, display=True, top_features=5):
         """ Retrouve les mots (n-grams) discriminants en appliquant un classifieur
             SVM linéaire avec une régularisation Elastic Net.
         """
-        if self.sum_sim_threshold.all() == None:
-            raise ValueError('Cannot apply SVM linear model on non-existing data. Please use TextProcessor.overall_threshold beforehand.')
+        if type(threshold) != np.ndarray:
+            threshold = self.sum_sim_threshold
         
+            
         # Données d'apprentissage
         xtrain = self.X.toarray()
-        ytrain = self.sum_sim_threshold
+        ytrain = threshold
         
         # Phase d'apprentissage
         clf = SGDClassifier(loss='hinge', penalty='elasticnet')
@@ -1260,6 +1319,68 @@ def etude_1(data, fields, id_prod, month_min=None, month_max=None, vtype='tf-idf
     
     return tp
 
+def etude_1_bis(data, fields, id_prod, start_burst=None, end_burst=None, start_nb=None, end_nb=None, vtype='tf-idf', analyzer='word', ngram_range=(1,1), display_features=True, top_features=5):
+    """ Première méthode proposée.
+    """
+    corpus_burst = create_corpus(data, fields, id_prod, start_burst, end_burst)
+    tp_burst = TextProcessor(corpus_burst)
+    tp_burst.process(lower=True, remove_punc=True, remove_digits=True, normalize=True, remove_stopwords=True, stemming=True)
+    X_burst, features_burst = tp_burst.vectorize(vtype=vtype, analyzer=analyzer, ngram_range=ngram_range)
+    
+    corpus_nb = create_corpus(data, fields, id_prod, start_nb, end_nb)
+    tp_nb = TextProcessor(corpus_nb)
+    tp_nb.process(lower=True, remove_punc=True, remove_digits=True, normalize=True, remove_stopwords=True, stemming=True)
+    X_nb, features_nb = tp_nb.vectorize(vtype=vtype, analyzer=analyzer, ngram_range=ngram_range)
+    
+    # Calcul et affichage de la matrice de similarité cosinus
+    sim_matrix_burst = tp_burst.similarity_matrix()
+    sim_matrix_nb = tp_nb.similarity_matrix()
+    
+    # Moyenne des similarités non nulles hors-burst
+    nb_mean = np.nanmean(np.where(sim_matrix_nb!=0, sim_matrix_nb, np.nan))
+    sim_matrix = np.where(sim_matrix_burst > nb_mean, sim_matrix_burst - nb_mean, 0)
+    
+    # On demande à fixer un seuil sur la mesure de similarité
+    plt.figure()
+    plt.title('Matrice de similarité en période de burst')
+    plt.imshow( sim_matrix_burst, cmap='Greens', vmin=0, vmax=1 )
+    plt.show()
+    
+    plt.figure()
+    plt.title('Matrice d\'écart de similarité à la moyenne en période de burst')
+    plt.imshow( sim_matrix, cmap='Greens', vmin=0, vmax=1 )
+    plt.show()
+    
+    plt.figure()
+    plt.title('Histogramme des écarts de similarité à la moyenne')
+    plt.hist( np.sum(sim_matrix, axis=1), color='lightsteelblue' )
+    plt.show()
+    
+    threshold = float( input('Seuil sur les écarts de similarité: ') ) 
+    
+    sim_matrix = np.where( sim_matrix > float(threshold), 1, 0 )
+
+    plt.figure()
+    plt.title('Matrice d\'écart de similarité à la moyenne binarisée')
+    plt.imshow( sim_matrix, cmap='Greens', vmin=0, vmax=1 )
+    plt.show()
+    
+    # Labellisation: 1 si la somme des similarités sur une ligne > 0, 0 sinon
+    threshold_matrix = np.where( sim_matrix.sum( axis = 1 ) > 0, 1, 0 )
+    
+    plt.figure()
+    plt.title('Label par review')
+    plt.imshow( threshold_matrix.reshape(-1,1), cmap='Greens', vmin=0, vmax=1 )
+    plt.show()
+    
+    # Affichage des features discriminants
+    main_features = tp_burst.discriminant_features(threshold=threshold_matrix, display=True, top_features=top_features)
+    
+    #for i in range(len(sum_sim_threshold)):
+    #    if sum_sim_threshold[i]==1:
+    #        print('\n\n', corpus[i])
+    
+    return tp_burst
 
 def etude_2(data, fields, id_prod, month_min, month_max, vtype='tf-idf', analyzer='word', ngram_range=(1,1)):
     """ Deuxième méthode proposée.
@@ -1302,6 +1423,7 @@ def etude_2(data, fields, id_prod, month_min, month_max, vtype='tf-idf', analyze
 
 # --- ETAPE 1: Parsing du fichier json
 # data, fields = parse('data/data.json', 65000)
+# data = doublonsNonSpams(data, fields)
 
 # --- ETAPE 2: Algorithme PageRank et spammicité
 # rg = ReviewGraph(data, fields, window = 1)
@@ -1348,3 +1470,6 @@ best: B00006JPBY, B0001J3UWU, B0002KRC5Y
 # 2è méthode
 """ 
 """
+
+# distillation: se documenter dessus, mettre en valeir dans le rapport
+# Process de distillation, le mettre en valeur
